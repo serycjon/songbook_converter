@@ -17,7 +17,7 @@ import argparse
 import re
 import io
 import os
-
+from collections import namedtuple
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description='')
@@ -53,7 +53,7 @@ def get_plaintext_song(url):
     return plaintext, autor, nazev
 
 def pure_chord_line(line):
-    pure_chord_re = ur"^(\s*?\[.+?\])+\s*?$"
+    pure_chord_re = ur"^(\s*?\[[^:]+?\])+\s*?$"
     m = re.match(pure_chord_re, line)
     return m is not None
 
@@ -111,8 +111,120 @@ def versify(song):
         else:
             last_opened = False
             versified.append(line)
+    versified.append(verse_end)
 
     return u'\n' + u'\n'.join(versified) + u'\n'
+
+def get_line_flags(line):
+    ## possible types: empty, part_number, part_number_with_text, text
+    if len(line.strip()) == 0:
+        empty = True
+    else:
+        empty = False
+
+    verse_beg_re = ur"\s*?[0-9]+?\."
+    if re.match(verse_beg_re, line):
+        part_number = True
+    else:
+        part_number = False
+
+    chorus_beg_re = ur"\s*?(®|R)[^a-zA-Z0-9]"
+    if re.match(chorus_beg_re, line):
+        chorus_indicator = True
+    else:
+        chorus_indicator = False
+
+    signature_re = ur"\s*?(®|[a-zA-Z0-9])+?[.:]"
+    if re.match(signature_re, line):
+        signature = True
+    else:
+        signature = False
+
+    if len(line.strip()) > 10:
+        text = True
+    else:
+        text = False
+
+    Flags = namedtuple('Flags', 'empty number chorus text signature')
+    return Flags(empty, part_number, chorus_indicator, text, signature)
+
+def chord_pro_versify(song):
+    part_dict = {'verse': (u'{start_of_verse}',
+                           u'{end_of_verse}'),
+                 'chorus': (u'{start_of_chorus)',
+                            u'{end_of_chorus}')}
+    # try finding paragraphs (empty lines separating them)
+    # try finding an offset for the whole song
+    # try finding verses by numbers 1., 2., R:
+    # [: blab :] is not chord!
+    lines = song.split('\n')
+    i = 0
+    versified = []
+
+    versified.append(part_dict['verse'][0])
+    current_part = 'verse'
+
+    while i < len(lines):
+        line = lines[i]
+
+        line_flags = get_line_flags(line)
+        if line_flags.empty:
+            versified.append(part_dict[current_part][1])
+            versified.append('')
+            versified.append(part_dict['verse'][0])
+            current_part = 'verse'
+        else:
+            if line_flags.number:
+                versified.append(part_dict[current_part][1])
+                versified.append('')
+                versified.append(part_dict['verse'][0])
+                versified.append(line)
+                current_part = 'verse'
+
+            elif line_flags.chorus:
+                # print(u'{},{}: {}'.format(line_flags.chorus, line_flags.text, line))
+                if line_flags.text or (i+1 < len(lines) and get_line_flags(lines[i+1]).text and not get_line_flags(lines[i+1]).signature):
+                    versified.append(part_dict[current_part][1])
+                    versified.append('')
+                    versified.append(part_dict['chorus'][0])
+                    versified.append(line)
+                    current_part = 'chorus'
+                else:
+                    versified.append(part_dict[current_part][1])
+                    versified.append('')
+                    versified.append(u'{chorus}')
+                    versified.append('')
+                    versified.append(part_dict['verse'][0])
+                    current_part = 'verse'
+            else:
+                versified.append(line)
+        i += 1
+
+    versified.append(part_dict[current_part][1])
+
+    cleaned = []
+    i = 0
+    while i < len(versified):
+        line = versified[i]
+        if i+1 < len(versified):
+            next_line = versified[i+1]
+        else:
+            next_line = None
+
+        if len(line.strip()) == 0 and next_line is not None and len(next_line.strip()) == 0:
+            i += 1
+            continue
+        elif line == part_dict['verse'][0] and next_line is not None and next_line == part_dict['verse'][1]:
+            i += 2
+            continue
+        elif line == part_dict['chorus'][0] and next_line is not None and next_line == part_dict['chorus'][1]:
+            i += 2
+            continue
+        else:
+            cleaned.append(line)
+            i += 1
+                
+    return u'\n' + u'\n'.join(cleaned) + u'\n'
 
 def to_tex(inlined, author, song_name):
     header = u'''\\beginsong{{{}}}[by={{{}}},
@@ -123,6 +235,14 @@ def to_tex(inlined, author, song_name):
     texified = re.sub('(\[.+?\])', replacement, inlined)
     texified = versify(texified)
     return header + '\n' + texified + '\n' + '\\endsong\n'
+
+def to_chord_pro(inlined, author, song_name, url):
+    header = u'''{{title: {}}}
+{{artist: {}}}
+{{meta: source {}}}
+'''.format(song_name, author, url)
+    versified = chord_pro_versify(inlined)
+    return header + '\n' + versified + '\n'
 
 def string_normalize(data):
     czech = translate_czech(data)
@@ -136,14 +256,19 @@ def translate_czech(data):
 def main(url):
     plaintext, autor, nazev = get_plaintext_song(url)
     inlined = inline_chords(plaintext)
+    chord_pro = to_chord_pro(inlined, autor, nazev, url)
     texified = to_tex(inlined, autor, nazev)
 
-    out_name = '{}_{}.tex'.format(string_normalize(autor), string_normalize(nazev))
+    out_name = '{}_{}'.format(string_normalize(autor), string_normalize(nazev))
     print('out_name: {}'.format(out_name))
 
     out_path = os.path.join('songs', out_name)
-    with io.open(out_path, 'w', encoding='utf8') as fout:
+    with io.open(out_path+'.tex', 'w', encoding='utf8') as fout:
         fout.write(texified)
+
+    out_path = os.path.join('songs_chord_pro', out_name)
+    with io.open(out_path+'.chord', 'w', encoding='utf8') as fout:
+        fout.write(chord_pro)
     
     return 0
 
@@ -158,3 +283,4 @@ if __name__ == '__main__':
             main(url)
         except Exception as e:
             print(u'url: "{}" has failed'.format(url))
+            print(repr(e))
