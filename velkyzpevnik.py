@@ -96,25 +96,6 @@ def inline_chords(plaintext):
     inlined = '\n'.join(inlined_lines)
     return inlined
 
-def versify(song):
-    verse_beg = u'\\beginverse'
-    verse_end = u'\\endverse'
-    lines = song.split('\n')
-    versified = []
-    versified.append(verse_beg)
-    last_opened = True
-    for line in lines:
-        if len(line.strip()) == 0:
-            if not last_opened:
-                versified.append(verse_end)
-                versified.append(verse_beg)
-        else:
-            last_opened = False
-            versified.append(line)
-    versified.append(verse_end)
-
-    return u'\n' + u'\n'.join(versified) + u'\n'
-
 def get_line_flags(line):
     ## possible types: empty, part_number, part_number_with_text, text
     if len(line.strip()) == 0:
@@ -151,7 +132,7 @@ def get_line_flags(line):
 def chord_pro_versify(song):
     part_dict = {'verse': (u'{start_of_verse}',
                            u'{end_of_verse}'),
-                 'chorus': (u'{start_of_chorus)',
+                 'chorus': (u'{start_of_chorus}',
                             u'{end_of_chorus}')}
     # try finding paragraphs (empty lines separating them)
     # try finding an offset for the whole song
@@ -205,19 +186,30 @@ def chord_pro_versify(song):
     cleaned = []
     i = 0
     while i < len(versified):
-        line = versified[i]
+        line = versified[i].strip()
         if i+1 < len(versified):
-            next_line = versified[i+1]
+            next_line = versified[i+1].strip()
         else:
             next_line = None
 
-        if len(line.strip()) == 0 and next_line is not None and len(next_line.strip()) == 0:
+        # if next_line is not None:
+        #     print('--'+line+'--')
+        #     print('--'+next_line+'--')
+        #     print('len(line): {}'.format(len(line)))
+        #     print('len(next_line): {}'.format(len(next_line)))
+        # else:
+        #     print('NONE!!!')
+
+        if (len(line) == 0) and (next_line is not None) and (len(next_line) == 0):
+            # print('double empty line!')
             i += 1
             continue
         elif line == part_dict['verse'][0] and next_line is not None and next_line == part_dict['verse'][1]:
+            # print('empty verse!')
             i += 2
             continue
         elif line == part_dict['chorus'][0] and next_line is not None and next_line == part_dict['chorus'][1]:
+            # print('empty chorus!')
             i += 2
             continue
         else:
@@ -225,16 +217,6 @@ def chord_pro_versify(song):
             i += 1
                 
     return u'\n' + u'\n'.join(cleaned) + u'\n'
-
-def to_tex(inlined, author, song_name):
-    header = u'''\\beginsong{{{}}}[by={{{}}},
-    sr={{}},
-    cr={{}}]
-    \\transpose{{0}}'''.format(song_name, author)
-    replacement = lambda m: u"\\" + m.group(1)
-    texified = re.sub('(\[.+?\])', replacement, inlined)
-    texified = versify(texified)
-    return header + '\n' + texified + '\n' + '\\endsong\n'
 
 def to_chord_pro(inlined, author, song_name, url):
     header = u'''{{title: {}}}
@@ -257,18 +239,21 @@ def main(url):
     plaintext, autor, nazev = get_plaintext_song(url)
     inlined = inline_chords(plaintext)
     chord_pro = to_chord_pro(inlined, autor, nazev, url)
-    texified = to_tex(inlined, autor, nazev)
+    # texified = to_tex(inlined, autor, nazev)
 
     out_name = '{}_{}'.format(string_normalize(autor), string_normalize(nazev))
-    print('out_name: {}'.format(out_name))
 
-    out_path = os.path.join('songs', out_name)
-    with io.open(out_path+'.tex', 'w', encoding='utf8') as fout:
-        fout.write(texified)
+    # out_path = os.path.join('songs', out_name+'.tex')
+    # with io.open(out_path, 'w', encoding='utf8') as fout:
+    #     fout.write(texified)
 
-    out_path = os.path.join('songs_chord_pro', out_name)
-    with io.open(out_path+'.chord', 'w', encoding='utf8') as fout:
-        fout.write(chord_pro)
+    out_path = os.path.join('songs_chord_pro', out_name+'.chord')
+    if not os.path.exists(out_path):
+        print('adding: {}'.format(out_name))
+        with io.open(out_path, 'w', encoding='utf8') as fout:
+            fout.write(chord_pro)
+    else:
+        print('already exists: {}'.format(out_name))
     
     return 0
 
@@ -279,6 +264,8 @@ if __name__ == '__main__':
 
     urls = list_file.split('\n')
     for url in urls:
+        if url.startswith('#'):
+            continue
         try:
             main(url)
         except Exception as e:
